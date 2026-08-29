@@ -818,16 +818,19 @@ fn render_launch_content_line(
 enum LaunchTier {
     /// Row column only — no wordmark, no card, no group headings.
     Compact,
-    /// Wordmark, readiness facts, grouped rows with their descriptions.
+    /// Wordmark, state facts, grouped rows with their wrapped descriptions.
     Standard,
-    /// Standard plus the framed welcome card.
+    /// Standard plus the framed state card.
     Full,
 }
 
+/// `Standard` asks for 24 rows rather than 22 because each opener's
+/// description is now two rows: at 22 the Quit row fell under the closing
+/// rule and silently disappeared from a menu that advertises it.
 fn launch_tier(area: Rect) -> LaunchTier {
     if area.width >= 72 && area.height >= 30 {
         LaunchTier::Full
-    } else if area.width >= 60 && area.height >= 22 {
+    } else if area.width >= 60 && area.height >= 24 {
         LaunchTier::Standard
     } else {
         LaunchTier::Compact
@@ -859,17 +862,41 @@ fn launch_column_width(area: Rect, tier: LaunchTier) -> usize {
     }
 }
 
-/// Top row of the welcome card (`Full` only).
+/// Top row of the state card (`Full` only).
 const LAUNCH_CARD_TOP: u16 = 5;
-/// Card body rows: welcome line, blank, workspace fact, provider fact.
+/// Card body rows: workspace identity, blank, provider, saved sessions.
 const LAUNCH_CARD_BODY: u16 = 4;
+/// Rows of standing chrome under the closing rule. `Compact` keeps the
+/// one-line status summary below the key hint; the detailed tiers dropped it
+/// (the card and the fact rows already carry those facts), so the rule sits
+/// one row lower and the hint takes the last row instead of leaving an empty
+/// one under itself.
+const fn launch_chrome_rows(tier: LaunchTier) -> u16 {
+    match tier {
+        LaunchTier::Compact => 3,
+        LaunchTier::Standard | LaunchTier::Full => 2,
+    }
+}
+
+/// Nothing may be painted on the closing rule or the chrome rows beneath it.
+/// The renderer and [`record_launch_row_areas`] read this same floor.
+fn launch_content_floor(area: Rect) -> u16 {
+    area.height
+        .saturating_sub(launch_chrome_rows(launch_tier(area)))
+}
+
+/// Rows reserved for each opener's description. Two, always — a locale whose
+/// sentence fits on one line leaves the second blank rather than shifting
+/// every row below it, because `launch_row_y` must stay a function of the
+/// area alone or the mouse hit boxes drift away from the paint.
+const LAUNCH_DESCRIPTION_ROWS: u16 = 2;
 
 /// Group heading rows, in the order [`LAUNCH_GROUP_HEADINGS`] names them.
 const fn launch_heading_rows(tier: LaunchTier) -> [u16; 3] {
     match tier {
-        LaunchTier::Full => [12, 18, 22],
+        LaunchTier::Full => [12, 20, 24],
         // Compact draws no headings; its array is never read.
-        LaunchTier::Standard | LaunchTier::Compact => [6, 12, 16],
+        LaunchTier::Standard | LaunchTier::Compact => [6, 14, 18],
     }
 }
 
@@ -882,8 +909,8 @@ const LAUNCH_GROUP_HEADINGS: [MessageId; 3] = [
 fn launch_row_y(area: Rect, index: usize) -> u16 {
     // Both detailed tiers place the six rows in three labelled groups: two
     // openers that each carry a description line, then Continue, then More.
-    const STANDARD_ROW_Y: [u16; LAUNCH_ROWS.len()] = [7, 9, 13, 14, 17, 18];
-    const FULL_ROW_Y: [u16; LAUNCH_ROWS.len()] = [13, 15, 19, 20, 23, 24];
+    const STANDARD_ROW_Y: [u16; LAUNCH_ROWS.len()] = [7, 10, 15, 16, 19, 20];
+    const FULL_ROW_Y: [u16; LAUNCH_ROWS.len()] = [13, 16, 21, 22, 25, 26];
     match launch_tier(area) {
         LaunchTier::Full => FULL_ROW_Y[index],
         LaunchTier::Standard => STANDARD_ROW_Y[index],
@@ -902,18 +929,30 @@ fn launch_workspace_name(app: &App) -> String {
         )
 }
 
-/// Workspace and provider readiness, as the two lines every detailed tier
-/// shows — framed inside the card at `Full`, unframed at `Standard`.
-fn launch_readiness(app: &App) -> (String, String, Style) {
-    let workspace = tr(
-        app.ui_locale,
-        if app.launch.worktree_available {
-            MessageId::LaunchWorkspaceGitReady
-        } else {
-            MessageId::LaunchWorkspaceFolderReady
-        },
-    )
-    .replace("{name}", &launch_workspace_name(app));
+/// What the detailed tiers say about the state you are returning to.
+///
+/// A launch screen nobody sees on first run — it is opt-in, and first run
+/// hands you the composer directly — is a screen for people who have been
+/// here before. So it reports what changed since last time rather than
+/// greeting anyone: which checkout and branch this is, whether a route is
+/// ready, and whether `Resume` has anything behind it.
+///
+/// The git facts come from the shared non-blocking cache the header reads;
+/// a probe runs on the idle event loop, never on the render path, so an
+/// early frame simply has no branch yet and says nothing rather than
+/// guessing.
+fn launch_facts(app: &App) -> [(String, Style); 3] {
+    let git = crate::tui::git_status::cached_status();
+    let identity = crate::tui::git_status::chrome_label(&git).unwrap_or_else(|| {
+        // No branch to name the checkout, so the folder name alone would sit
+        // there as a stray word. Say what kind of place it is.
+        format!(
+            "{}{FIELD_JOIN}{}",
+            launch_workspace_name(app),
+            tr(app.ui_locale, MessageId::LaunchWorkspaceFolderShort)
+        )
+    });
+
     let provider = tr(
         app.ui_locale,
         if app.onboarding_needs_api_key {
@@ -928,7 +967,41 @@ fn launch_readiness(app: &App) -> (String, String, Style) {
     } else {
         app.ui_theme.success
     });
-    (workspace, provider, provider_style)
+
+    let count = app.launch.workspace_session_count;
+    let sessions = match count {
+        0 => tr(app.ui_locale, MessageId::LaunchNoSavedSessions).into_owned(),
+        1 => tr(app.ui_locale, MessageId::LaunchSavedSessionSingular).into_owned(),
+        _ => tr(app.ui_locale, MessageId::LaunchSavedSessionsPlural)
+            .replace("{count}", &count.to_string()),
+    };
+    let sessions_style = Style::default().fg(if count == 0 {
+        app.ui_theme.text_dim
+    } else {
+        app.ui_theme.text_soft
+    });
+
+    [
+        (
+            identity,
+            Style::default()
+                .fg(app.ui_theme.text_body)
+                .add_modifier(Modifier::BOLD),
+        ),
+        (provider, provider_style),
+        (sessions, sessions_style),
+    ]
+}
+
+/// `Resume` with nothing behind it, and `New worktree` outside a repository,
+/// are rows that can only report their own emptiness. Both are dimmed so the
+/// menu never offers a dead end at full contrast.
+fn launch_row_is_inert(launch: &crate::tui::app::LaunchState, index: usize) -> bool {
+    match index {
+        2 => launch.workspace_session_count == 0,
+        3 => !launch.worktree_available,
+        _ => false,
+    }
 }
 
 /// One-line identity header for terminals too small to earn the wordmark.
@@ -1053,10 +1126,9 @@ fn render_launch_card(area: Rect, buf: &mut Buffer, app: &App, top: u16) {
     let inner = outer.saturating_sub(2);
     let text_budget = inner.saturating_sub(FACT_PAD.saturating_add(TEXT_PAD));
     let border = Style::default().fg(app.ui_theme.border);
-    let (workspace, provider, provider_style) = launch_readiness(app);
+    let [identity, provider, sessions] = launch_facts(app);
 
-    let welcome =
-        tr(app.ui_locale, MessageId::LaunchWelcomeBanner).replace("{name}", brand::DISPLAY_NAME);
+    let (identity_text, identity_style) = identity;
     let body: [Vec<Span<'static>>; LAUNCH_CARD_BODY as usize] = [
         vec![
             Span::styled(
@@ -1064,23 +1136,18 @@ fn render_launch_card(area: Rect, buf: &mut Buffer, app: &App, top: u16) {
                 Style::default().fg(app.ui_theme.accent_secondary),
             ),
             Span::styled(
-                truncate_to_width(&welcome, text_budget.saturating_add(FACT_PAD - TEXT_PAD)),
-                Style::default()
-                    .fg(app.ui_theme.text_body)
-                    .add_modifier(Modifier::BOLD),
+                truncate_to_width(&identity_text, text_budget + FACT_PAD - TEXT_PAD),
+                identity_style,
             ),
         ],
         Vec::new(),
         vec![
             Span::raw(" ".repeat(FACT_PAD.saturating_sub(TEXT_PAD))),
-            Span::styled(
-                truncate_to_width(&workspace, text_budget),
-                Style::default().fg(app.ui_theme.text_soft),
-            ),
+            Span::styled(truncate_to_width(&provider.0, text_budget), provider.1),
         ],
         vec![
             Span::raw(" ".repeat(FACT_PAD.saturating_sub(TEXT_PAD))),
-            Span::styled(truncate_to_width(&provider, text_budget), provider_style),
+            Span::styled(truncate_to_width(&sessions.0, text_budget), sessions.1),
         ],
     ];
 
@@ -1127,9 +1194,7 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         .render(area, buf);
     let width = usize::from(area.width);
     let tier = launch_tier(area);
-    // Nothing may be painted onto the closing rule or the two chrome rows
-    // beneath it.
-    let content_floor = area.height.saturating_sub(3);
+    let content_floor = launch_content_floor(area);
 
     match tier {
         LaunchTier::Compact => render_launch_compact_header(area, buf, app),
@@ -1143,29 +1208,19 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         LaunchTier::Standard => {
             // Rows 3 and 4, so the one blank row this tier can afford lands
             // where it earns the most: between the identity block and the
-            // first decision.
-            let (workspace, provider, provider_style) = launch_readiness(app);
+            // first decision. The saved-session count is dropped here — the
+            // Resume row states it, and this tier has no rows to spare.
+            let [identity, provider, _] = launch_facts(app);
             let budget = launch_column_width(area, tier);
-            render_launch_content_line(
-                area,
-                buf,
-                3,
-                LAUNCH_INSET,
-                vec![Span::styled(
-                    truncate_to_width(&workspace, budget),
-                    Style::default().fg(app.ui_theme.text_soft),
-                )],
-            );
-            render_launch_content_line(
-                area,
-                buf,
-                4,
-                LAUNCH_INSET,
-                vec![Span::styled(
-                    truncate_to_width(&provider, budget),
-                    provider_style,
-                )],
-            );
+            for (offset, (text, style)) in [identity, provider].into_iter().enumerate() {
+                render_launch_content_line(
+                    area,
+                    buf,
+                    3u16.saturating_add(u16::try_from(offset).unwrap_or(0)),
+                    LAUNCH_INSET,
+                    vec![Span::styled(truncate_to_width(&text, budget), style)],
+                );
+            }
         }
         LaunchTier::Compact => {}
     }
@@ -1191,30 +1246,42 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
                 )],
             );
         }
+        // The description is indented one step inside the reading column, so
+        // it gives that step back on the right rather than running past the
+        // key column beside it. It wraps instead of truncating: this sentence
+        // is the only thing on the screen that explains the difference
+        // between Work and Chat, and in several locales it is longer than one
+        // line — cutting it drops the clause that carries the meaning.
+        let description_budget =
+            launch_column_width(area, tier).saturating_sub(usize::from(LAUNCH_INSET));
         for (row, description_id) in [
             (launch_row_y(area, 0), MessageId::LaunchWorkDescription),
             (launch_row_y(area, 1), MessageId::LaunchChatDescription),
         ] {
-            let y = row.saturating_add(1);
-            if y >= content_floor {
-                continue;
+            let text = tr(app.ui_locale, description_id);
+            let lines = crate::tui::onboarding::wrap_words(&text, description_budget);
+            for (offset, segment) in lines
+                .into_iter()
+                .take(LAUNCH_DESCRIPTION_ROWS as usize)
+                .enumerate()
+            {
+                let y = row
+                    .saturating_add(1)
+                    .saturating_add(u16::try_from(offset).unwrap_or(0));
+                if y >= content_floor {
+                    break;
+                }
+                render_launch_content_line(
+                    area,
+                    buf,
+                    y,
+                    LAUNCH_INSET.saturating_mul(2),
+                    vec![Span::styled(
+                        segment,
+                        Style::default().fg(app.ui_theme.text_muted),
+                    )],
+                );
             }
-            render_launch_content_line(
-                area,
-                buf,
-                y,
-                LAUNCH_INSET.saturating_mul(2),
-                vec![Span::styled(
-                    // The description is indented one step inside the reading
-                    // column, so it gives that step back on the right rather
-                    // than running past the key column beside it.
-                    truncate_to_width(
-                        &tr(app.ui_locale, description_id),
-                        launch_column_width(area, tier).saturating_sub(usize::from(LAUNCH_INSET)),
-                    ),
-                    Style::default().fg(app.ui_theme.text_muted),
-                )],
-            );
         }
     }
 
@@ -1232,11 +1299,17 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
             ));
         }
         if index == 2 {
-            label.push_str(&format!(
-                " · {}",
+            // Several locales inflect the participle, so "1 salvas" next to a
+            // card reading "1 sessão salva" is a visible grammar error, not a
+            // rounding of one.
+            let count = app.launch.workspace_session_count;
+            let saved = if count == 1 {
+                tr(app.ui_locale, MessageId::LaunchMenuSavedCountSingular).into_owned()
+            } else {
                 tr(app.ui_locale, MessageId::LaunchMenuSavedCount)
-                    .replace("{count}", &app.launch.workspace_session_count.to_string())
-            ));
+                    .replace("{count}", &count.to_string())
+            };
+            label.push_str(&format!(" · {saved}"));
         }
         let prefix = if selected { "▸ " } else { "  " };
         let key_width = key.width();
@@ -1246,7 +1319,7 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         let fill = content_width.saturating_sub(prefix.width() + label.width() + key_width);
         let row_style = if selected {
             crate::tui::menu_style::theme_selected_row_style(&app.ui_theme)
-        } else if index == 3 && !app.launch.worktree_available {
+        } else if launch_row_is_inert(&app.launch, index) {
             Style::default().fg(app.ui_theme.text_dim)
         } else {
             Style::default().fg(app.ui_theme.text_body)
@@ -1291,19 +1364,26 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         )
     } else if let Some(status) = app.launch.status.as_deref() {
         status.to_string()
-    } else if area.width < 60 {
-        format!(
-            "j/k:{} · Enter:{}",
-            tr(app.ui_locale, MessageId::LaunchHintMove),
-            tr(app.ui_locale, MessageId::LaunchHintOpen)
-        )
     } else {
-        tr(app.ui_locale, MessageId::LaunchTipFlags).into_owned()
+        // The keys this screen actually answers to. It used to advertise the
+        // CLI flags (`-w`, `-r`) at every width above 60 — teaching the
+        // command line to someone who is already past it, while the arrows
+        // and Ctrl+Q that do work here went unmentioned.
+        let move_hint = tr(app.ui_locale, MessageId::LaunchHintMove);
+        let open_hint = tr(app.ui_locale, MessageId::LaunchHintOpen);
+        if area.width < 60 {
+            format!("↑↓ {move_hint} · Enter {open_hint}")
+        } else {
+            format!(
+                "↑↓ {move_hint} · Enter {open_hint} · Ctrl+Q {}",
+                tr(app.ui_locale, MessageId::LaunchMenuQuit).to_lowercase()
+            )
+        }
     };
     render_launch_line(
         area,
         buf,
-        area.height.saturating_sub(2),
+        content_floor.saturating_add(1),
         vec![Span::styled(
             truncate_to_width(&prompt, width),
             Style::default().fg(if app.launch.status.is_some() {
@@ -1314,44 +1394,52 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         )],
     );
 
-    let workspace_kind = tr(
-        app.ui_locale,
-        if app.launch.worktree_available {
-            MessageId::LaunchWorkspaceGitShort
-        } else {
-            MessageId::LaunchWorkspaceFolderShort
-        },
-    );
-    let provider = tr(
-        app.ui_locale,
-        if app.onboarding_needs_api_key {
-            MessageId::LaunchProviderSetupShort
-        } else {
-            MessageId::LaunchProviderConfiguredShort
-        },
-    );
-    let status = format!(
-        "{} · {workspace_kind} · {provider}",
-        launch_workspace_name(app)
-    );
-    render_launch_line(
-        area,
-        buf,
-        area.height.saturating_sub(1),
-        vec![Span::styled(
-            truncate_to_width(&status, width),
-            Style::default().fg(app.ui_theme.text_dim),
-        )],
-    );
+    // The standing status line restated the workspace and the provider in
+    // different words from the card and the fact rows directly above it —
+    // three renderings of two facts, each one making the eye check whether
+    // it had missed a distinction. It earns its row only in Compact, which
+    // shows neither.
+    if tier == LaunchTier::Compact {
+        let workspace_kind = tr(
+            app.ui_locale,
+            if app.launch.worktree_available {
+                MessageId::LaunchWorkspaceGitShort
+            } else {
+                MessageId::LaunchWorkspaceFolderShort
+            },
+        );
+        let provider = tr(
+            app.ui_locale,
+            if app.onboarding_needs_api_key {
+                MessageId::LaunchProviderSetupShort
+            } else {
+                MessageId::LaunchProviderConfiguredShort
+            },
+        );
+        let status = format!(
+            "{} · {workspace_kind} · {provider}",
+            launch_workspace_name(app)
+        );
+        render_launch_line(
+            area,
+            buf,
+            area.height.saturating_sub(1),
+            vec![Span::styled(
+                truncate_to_width(&status, width),
+                Style::default().fg(app.ui_theme.text_dim),
+            )],
+        );
+    }
 }
 
 /// Record the launch row rects immediately after the launch frame is painted.
 /// The coordinates mirror the renderer's responsive row placement exactly.
 pub fn record_launch_row_areas(area: Rect, launch: &mut crate::tui::app::LaunchState) {
     launch.row_areas.clear();
+    let floor = launch_content_floor(area);
     for index in 0..LAUNCH_ROWS.len() {
         let y = launch_row_y(area, index);
-        if y >= area.height.saturating_sub(3) {
+        if y >= floor {
             break;
         }
         launch.row_areas.push(Rect {
@@ -2321,8 +2409,8 @@ mod header_tests {
 #[cfg(test)]
 mod launch_tests {
     use super::{
-        LAUNCH_ROWS, LaunchTier, launch_row_y, launch_tier, record_launch_row_areas,
-        render_launch_screen,
+        LAUNCH_ROWS, LaunchTier, launch_content_floor, launch_row_y, launch_tier,
+        record_launch_row_areas, render_launch_screen,
     };
     use crate::tui::app::App;
     use crate::tui::brand;
@@ -2353,18 +2441,23 @@ mod launch_tests {
     /// it. This is the contract the launch menu is unusable without.
     #[test]
     fn recorded_rows_match_the_painted_rows_at_every_size() {
+        // The pairs around each tier threshold are the ones that break when a
+        // row is added or a description grows: 24 rows is exactly Standard,
+        // 23 falls to Compact, 30 is exactly Full.
         for (width, height) in [
             (100u16, 34u16),
-            (80, 24),
+            (100, 30),
             (72, 30),
-            (60, 22),
+            (80, 24),
+            (80, 23),
+            (60, 24),
             (54, 16),
             (40, 10),
         ] {
             let area = Rect::new(0, 0, width, height);
             let mut launch = crate::tui::app::LaunchState::new(true, std::path::Path::new("."));
             record_launch_row_areas(area, &mut launch);
-            let floor = height.saturating_sub(3);
+            let floor = launch_content_floor(area);
             for (index, recorded) in launch.row_areas.iter().enumerate() {
                 assert_eq!(recorded.y, launch_row_y(area, index), "{width}x{height}");
                 assert!(recorded.y < floor, "{width}x{height} row {index} on chrome");

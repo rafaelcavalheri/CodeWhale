@@ -19,6 +19,11 @@ Read the repository guidance first.
 - Compact layouts remove chrome before content. Selectable rows need recorded
   hitboxes, visible focus, keyboard/mouse parity, and confirmation for
   destructive actions.
+- The pre-session launch screen has its own contract
+  (`docs/design/LAUNCH_SCREEN.md`): its layout is a function of the area alone
+  so paint and hitboxes cannot diverge, its prose wraps rather than truncates,
+  and the product name it shows is display-only — not a rename of any
+  identifier.
 - User-visible prose uses `tr(locale, MessageId::...)`. Commands, key names, and
   glyphs are composed in code. Follow `locales/AGENTS.md` for string changes.
 
