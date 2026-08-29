@@ -24,6 +24,7 @@ mod automation_routing;
 pub mod background_indicator;
 pub mod backtrack;
 pub mod behavioral_tips;
+pub mod brand;
 pub mod clipboard;
 pub mod color_compat;
 pub mod command_palette;

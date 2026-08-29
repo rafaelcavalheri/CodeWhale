@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "동작을 찾아 실행하세요",
   "ConfigSubtitle": "설정을 우선 표시하고, 원시 키는 고급 정보에서 확인",
   "LaunchStartTitle": "여기서 시작",
+  "LaunchWelcomeBanner": "{name}에 오신 것을 환영합니다",
   "LaunchMenuWork": "작업 · 현재 폴더",
   "LaunchMenuChat": "채팅 · 읽기 전용",
   "LaunchWorkDescription": "이 폴더에서 로컬 도구를 사용합니다. 변경은 승인 정책을 따릅니다.",

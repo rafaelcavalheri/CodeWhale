@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "查找并执行一个操作",
   "ConfigSubtitle": "设置优先；原始键在高级详情",
   "LaunchStartTitle": "从这里开始",
+  "LaunchWelcomeBanner": "欢迎使用 {name}",
   "LaunchMenuWork": "工作 · 当前文件夹",
   "LaunchMenuChat": "聊天 · 只读",
   "LaunchWorkDescription": "在此文件夹中使用本地工具；更改遵循你的审批策略。",

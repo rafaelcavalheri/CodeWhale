@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "操作を見つけて実行",
   "ConfigSubtitle": "設定を先に。生キーは高度な詳細へ",
   "LaunchStartTitle": "ここから始める",
+  "LaunchWelcomeBanner": "{name} へようこそ",
   "LaunchMenuWork": "作業 · 現在のフォルダー",
   "LaunchMenuChat": "チャット · 読み取り専用",
   "LaunchWorkDescription": "このフォルダーでローカルツールを使います。変更は承認ポリシーに従います。",

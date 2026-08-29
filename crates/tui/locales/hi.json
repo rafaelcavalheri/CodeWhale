@@ -1107,6 +1107,7 @@
   "CommandPaletteSubtitle": "एक कार्रवाई खोजें और चलाएँ",
   "ConfigSubtitle": "पहले सेटिंग्स; रॉ कुंजियाँ उन्नत विवरण में",
   "LaunchStartTitle": "यहाँ से शुरू करें",
+  "LaunchWelcomeBanner": "{name} में आपका स्वागत है",
   "LaunchMenuWork": "काम · मौजूदा फ़ोल्डर",
   "LaunchMenuChat": "चैट · केवल पढ़ने के लिए",
   "LaunchWorkDescription": "इस फ़ोल्डर में स्थानीय टूल इस्तेमाल करें; बदलाव आपकी स्वीकृति नीति के अनुसार होंगे।",

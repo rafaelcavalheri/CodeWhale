@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "Find and run one action",
   "ConfigSubtitle": "Settings first; raw keys under advanced detail",
   "LaunchStartTitle": "Start here",
+  "LaunchWelcomeBanner": "Welcome to {name}",
   "LaunchMenuWork": "Work · current folder",
   "LaunchMenuChat": "Chat · read-only",
   "LaunchWorkDescription": "Use this folder with local tools; changes follow your approval policy.",

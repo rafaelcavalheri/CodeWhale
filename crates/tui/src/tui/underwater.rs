@@ -810,24 +810,84 @@ fn render_launch_content_line(
     );
 }
 
-fn launch_has_detail(area: Rect) -> bool {
-    area.width >= 60 && area.height >= 22
+/// Launch-screen density. Every layout decision below depends only on `area`,
+/// so the renderer and [`record_launch_row_areas`] cannot disagree about where
+/// a row landed: the mouse hit boxes are derived from the same arithmetic the
+/// paint used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchTier {
+    /// Row column only — no wordmark, no card, no group headings.
+    Compact,
+    /// Wordmark, readiness facts, grouped rows with their descriptions.
+    Standard,
+    /// Standard plus the framed welcome card.
+    Full,
 }
 
-fn launch_content_start(_area: Rect) -> u16 {
-    // Keep the decision block anchored just below the shell header at every
-    // detailed size. Vertically centering it made a wide terminal look like
-    // an old fixed-height menu floating in decorative emptiness.
-    3
+fn launch_tier(area: Rect) -> LaunchTier {
+    if area.width >= 72 && area.height >= 30 {
+        LaunchTier::Full
+    } else if area.width >= 60 && area.height >= 22 {
+        LaunchTier::Standard
+    } else {
+        LaunchTier::Compact
+    }
 }
+
+/// First row of the three-row wordmark. `Full` can spend a blank row above it
+/// so the mark is not welded to the terminal's top edge; `Standard` needs that
+/// row for the menu and starts flush.
+const fn launch_mark_top(tier: LaunchTier) -> u16 {
+    match tier {
+        LaunchTier::Full => 1,
+        LaunchTier::Standard | LaunchTier::Compact => 0,
+    }
+}
+
+/// Widest reading column the detailed tiers use. The welcome card and the
+/// menu rows share it, so the key column lands on the card's right edge
+/// instead of drifting off toward a 200-column terminal's far margin.
+const LAUNCH_MAX_COLUMN: usize = 76;
+/// Page inset on each side of that column.
+const LAUNCH_INSET: u16 = 2;
+
+fn launch_column_width(area: Rect, tier: LaunchTier) -> usize {
+    let full = usize::from(area.width.saturating_sub(LAUNCH_INSET.saturating_mul(2)));
+    match tier {
+        LaunchTier::Compact => full,
+        LaunchTier::Standard | LaunchTier::Full => full.min(LAUNCH_MAX_COLUMN),
+    }
+}
+
+/// Top row of the welcome card (`Full` only).
+const LAUNCH_CARD_TOP: u16 = 5;
+/// Card body rows: welcome line, blank, workspace fact, provider fact.
+const LAUNCH_CARD_BODY: u16 = 4;
+
+/// Group heading rows, in the order [`LAUNCH_GROUP_HEADINGS`] names them.
+const fn launch_heading_rows(tier: LaunchTier) -> [u16; 3] {
+    match tier {
+        LaunchTier::Full => [12, 18, 22],
+        // Compact draws no headings; its array is never read.
+        LaunchTier::Standard | LaunchTier::Compact => [6, 12, 16],
+    }
+}
+
+const LAUNCH_GROUP_HEADINGS: [MessageId; 3] = [
+    MessageId::LaunchStartTitle,
+    MessageId::LaunchGroupContinue,
+    MessageId::LaunchGroupMore,
+];
 
 fn launch_row_y(area: Rect, index: usize) -> u16 {
-    const DETAIL_ROW_OFFSETS: [u16; 6] = [4, 7, 11, 12, 15, 16];
-    let start = launch_content_start(area);
-    if launch_has_detail(area) {
-        start.saturating_add(DETAIL_ROW_OFFSETS[index])
-    } else {
-        start.saturating_add(u16::try_from(index).unwrap_or(0))
+    // Both detailed tiers place the six rows in three labelled groups: two
+    // openers that each carry a description line, then Continue, then More.
+    const STANDARD_ROW_Y: [u16; LAUNCH_ROWS.len()] = [7, 9, 13, 14, 17, 18];
+    const FULL_ROW_Y: [u16; LAUNCH_ROWS.len()] = [13, 15, 19, 20, 23, 24];
+    match launch_tier(area) {
+        LaunchTier::Full => FULL_ROW_Y[index],
+        LaunchTier::Standard => STANDARD_ROW_Y[index],
+        LaunchTier::Compact => 3u16.saturating_add(u16::try_from(index).unwrap_or(0)),
     }
 }
 
@@ -842,26 +902,52 @@ fn launch_workspace_name(app: &App) -> String {
         )
 }
 
-/// Render the distinct pre-session choice state. This screen contains no
-/// transcript, composer, dashboard, or post-launch whale: each row dispatches
-/// to real session/worktree machinery before the idle ocean is entered.
-pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, buf);
+/// Workspace and provider readiness, as the two lines every detailed tier
+/// shows — framed inside the card at `Full`, unframed at `Standard`.
+fn launch_readiness(app: &App) -> (String, String, Style) {
+    let workspace = tr(
+        app.ui_locale,
+        if app.launch.worktree_available {
+            MessageId::LaunchWorkspaceGitReady
+        } else {
+            MessageId::LaunchWorkspaceFolderReady
+        },
+    )
+    .replace("{name}", &launch_workspace_name(app));
+    let provider = tr(
+        app.ui_locale,
+        if app.onboarding_needs_api_key {
+            MessageId::LaunchProviderSetupNeeded
+        } else {
+            MessageId::LaunchProviderConfigured
+        },
+    )
+    .into_owned();
+    let provider_style = Style::default().fg(if app.onboarding_needs_api_key {
+        app.ui_theme.warning
+    } else {
+        app.ui_theme.success
+    });
+    (workspace, provider, provider_style)
+}
+
+/// One-line identity header for terminals too small to earn the wordmark.
+fn render_launch_compact_header(area: Rect, buf: &mut Buffer, app: &App) {
     let width = usize::from(area.width);
     let version = format!("v{}", shell_build_version());
-    let workspace_budget = width.saturating_sub(version.width() + 6);
+    let name = if width >= 44 {
+        crate::tui::brand::DISPLAY_NAME
+    } else {
+        crate::tui::brand::DISPLAY_NAME_SHORT
+    };
+    let workspace_budget = width.saturating_sub(name.width() + version.width() + 6);
     let workspace = truncate_to_width(
         &crate::utils::display_path(&app.workspace),
         workspace_budget,
     );
     let mut header = vec![
         Span::styled(
-            "cw",
+            name,
             Style::default()
                 .fg(app.ui_theme.accent_primary)
                 .add_modifier(Modifier::BOLD),
@@ -887,79 +973,216 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
             )],
         );
     }
+}
 
-    if launch_has_detail(area) {
-        let content_start = launch_content_start(area);
+/// Paint the three wordmark rows: block mark, then product name and build,
+/// the live route identity, and the workspace path. The facts beside the mark
+/// are read from the same state the session header reads — nothing here is
+/// decorative text impersonating status.
+fn render_launch_wordmark(area: Rect, buf: &mut Buffer, app: &App, top: u16) {
+    use crate::tui::brand;
+
+    // The page inset on each side, plus the mark and its gutter.
+    let budget =
+        usize::from(area.width).saturating_sub(brand::MARK_COLUMN + usize::from(LAUNCH_INSET) * 2);
+
+    let version = format!("v{}", shell_build_version());
+    let mut name_row = vec![Span::styled(
+        brand::DISPLAY_NAME,
+        Style::default()
+            .fg(app.ui_theme.accent_primary)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if brand::DISPLAY_NAME.width() + 2 + version.width() <= budget {
+        name_row.push(Span::raw("  "));
+        name_row.push(Span::styled(
+            version,
+            Style::default().fg(app.ui_theme.text_hint),
+        ));
+    }
+
+    let (provider, model) = app.effective_route_identity_display();
+    let route = match (model.is_empty(), provider.is_empty()) {
+        (true, _) => String::new(),
+        (false, true) => model,
+        (false, false) => format!("{model}{FIELD_JOIN}{provider}"),
+    };
+    let route_row = vec![Span::styled(
+        truncate_to_width(&route, budget),
+        Style::default().fg(app.ui_theme.text_soft),
+    )];
+
+    let path_row = vec![Span::styled(
+        truncate_to_width(&crate::utils::display_path(&app.workspace), budget),
+        Style::default().fg(app.ui_theme.text_muted),
+    )];
+
+    let mark_style = Style::default().fg(app.ui_theme.accent_primary);
+    for (offset, facts) in [name_row, route_row, path_row].into_iter().enumerate() {
+        let mut line = vec![
+            Span::styled(brand::MARK[offset], mark_style),
+            Span::raw(" ".repeat(brand::MARK_GUTTER)),
+        ];
+        line.extend(facts);
         render_launch_content_line(
             area,
             buf,
-            content_start,
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, MessageId::LaunchStartTitle).into_owned(),
+            top.saturating_add(u16::try_from(offset).unwrap_or(0)),
+            LAUNCH_INSET,
+            line,
+        );
+    }
+}
+
+/// The welcome card. It frames exactly what a first glance needs: which
+/// product opened, what this workspace is, and whether a route is configured.
+/// The facts are the same strings the `Standard` tier prints unframed, so the
+/// frame adds emphasis, never a second source of truth.
+fn render_launch_card(area: Rect, buf: &mut Buffer, app: &App, top: u16) {
+    use crate::tui::brand;
+
+    /// Border column plus the padding before the text starts.
+    const TEXT_PAD: usize = 2;
+    /// Facts sit under the welcome line's first word, not under its mark.
+    const FACT_PAD: usize = 4;
+
+    let outer = launch_column_width(area, LaunchTier::Full);
+    if outer < 24 {
+        return;
+    }
+    let inner = outer.saturating_sub(2);
+    let text_budget = inner.saturating_sub(FACT_PAD.saturating_add(TEXT_PAD));
+    let border = Style::default().fg(app.ui_theme.border);
+    let (workspace, provider, provider_style) = launch_readiness(app);
+
+    let welcome =
+        tr(app.ui_locale, MessageId::LaunchWelcomeBanner).replace("{name}", brand::DISPLAY_NAME);
+    let body: [Vec<Span<'static>>; LAUNCH_CARD_BODY as usize] = [
+        vec![
+            Span::styled(
+                format!("{} ", brand::CARD_MARK),
+                Style::default().fg(app.ui_theme.accent_secondary),
+            ),
+            Span::styled(
+                truncate_to_width(&welcome, text_budget.saturating_add(FACT_PAD - TEXT_PAD)),
                 Style::default()
                     .fg(app.ui_theme.text_body)
                     .add_modifier(Modifier::BOLD),
-            )],
-        );
-        let workspace_id = if app.launch.worktree_available {
-            MessageId::LaunchWorkspaceGitReady
-        } else {
-            MessageId::LaunchWorkspaceFolderReady
-        };
-        render_launch_content_line(
-            area,
-            buf,
-            content_start.saturating_add(1),
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, workspace_id).replace("{name}", &launch_workspace_name(app)),
+            ),
+        ],
+        Vec::new(),
+        vec![
+            Span::raw(" ".repeat(FACT_PAD.saturating_sub(TEXT_PAD))),
+            Span::styled(
+                truncate_to_width(&workspace, text_budget),
                 Style::default().fg(app.ui_theme.text_soft),
-            )],
-        );
-        let provider_id = if app.onboarding_needs_api_key {
-            MessageId::LaunchProviderSetupNeeded
-        } else {
-            MessageId::LaunchProviderConfigured
-        };
+            ),
+        ],
+        vec![
+            Span::raw(" ".repeat(FACT_PAD.saturating_sub(TEXT_PAD))),
+            Span::styled(truncate_to_width(&provider, text_budget), provider_style),
+        ],
+    ];
+
+    render_launch_content_line(
+        area,
+        buf,
+        top,
+        LAUNCH_INSET,
+        vec![Span::styled(format!("╭{}╮", "─".repeat(inner)), border)],
+    );
+    for (offset, spans) in body.into_iter().enumerate() {
+        let used = TEXT_PAD + span_width(&spans);
+        let mut line = vec![Span::styled("│", border), Span::raw(" ".repeat(TEXT_PAD))];
+        line.extend(spans);
+        line.push(Span::raw(" ".repeat(inner.saturating_sub(used))));
+        line.push(Span::styled("│", border));
         render_launch_content_line(
             area,
             buf,
-            content_start.saturating_add(2),
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, provider_id).into_owned(),
-                Style::default().fg(if app.onboarding_needs_api_key {
-                    app.ui_theme.warning
-                } else {
-                    app.ui_theme.success
-                }),
-            )],
+            top.saturating_add(1)
+                .saturating_add(u16::try_from(offset).unwrap_or(0)),
+            LAUNCH_INSET,
+            line,
         );
-        for (row, description_id) in [
-            (launch_row_y(area, 0), MessageId::LaunchWorkDescription),
-            (launch_row_y(area, 1), MessageId::LaunchChatDescription),
-        ] {
+    }
+    render_launch_content_line(
+        area,
+        buf,
+        top.saturating_add(1).saturating_add(LAUNCH_CARD_BODY),
+        LAUNCH_INSET,
+        vec![Span::styled(format!("╰{}╯", "─".repeat(inner)), border)],
+    );
+}
+
+/// Render the distinct pre-session choice state. This screen contains no
+/// transcript, composer, dashboard, or post-launch whale: each row dispatches
+/// to real session/worktree machinery before the idle ocean is entered.
+pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    Block::default()
+        .style(Style::default().bg(app.ui_theme.surface_bg))
+        .render(area, buf);
+    let width = usize::from(area.width);
+    let tier = launch_tier(area);
+    // Nothing may be painted onto the closing rule or the two chrome rows
+    // beneath it.
+    let content_floor = area.height.saturating_sub(3);
+
+    match tier {
+        LaunchTier::Compact => render_launch_compact_header(area, buf, app),
+        LaunchTier::Standard | LaunchTier::Full => {
+            render_launch_wordmark(area, buf, app, launch_mark_top(tier));
+        }
+    }
+
+    match tier {
+        LaunchTier::Full => render_launch_card(area, buf, app, LAUNCH_CARD_TOP),
+        LaunchTier::Standard => {
+            // Rows 3 and 4, so the one blank row this tier can afford lands
+            // where it earns the most: between the identity block and the
+            // first decision.
+            let (workspace, provider, provider_style) = launch_readiness(app);
+            let budget = launch_column_width(area, tier);
             render_launch_content_line(
                 area,
                 buf,
-                row.saturating_add(1),
-                4,
+                3,
+                LAUNCH_INSET,
                 vec![Span::styled(
-                    tr(app.ui_locale, description_id).into_owned(),
-                    Style::default().fg(app.ui_theme.text_muted),
+                    truncate_to_width(&workspace, budget),
+                    Style::default().fg(app.ui_theme.text_soft),
+                )],
+            );
+            render_launch_content_line(
+                area,
+                buf,
+                4,
+                LAUNCH_INSET,
+                vec![Span::styled(
+                    truncate_to_width(&provider, budget),
+                    provider_style,
                 )],
             );
         }
-        for (row, heading_id) in [
-            (launch_row_y(area, 2), MessageId::LaunchGroupContinue),
-            (launch_row_y(area, 4), MessageId::LaunchGroupMore),
-        ] {
+        LaunchTier::Compact => {}
+    }
+
+    if tier != LaunchTier::Compact {
+        for (y, heading_id) in launch_heading_rows(tier)
+            .into_iter()
+            .zip(LAUNCH_GROUP_HEADINGS)
+        {
+            if y >= content_floor {
+                continue;
+            }
             render_launch_content_line(
                 area,
                 buf,
-                row.saturating_sub(1),
-                2,
+                y,
+                LAUNCH_INSET,
                 vec![Span::styled(
                     tr(app.ui_locale, heading_id).into_owned(),
                     Style::default()
@@ -968,11 +1191,36 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
                 )],
             );
         }
+        for (row, description_id) in [
+            (launch_row_y(area, 0), MessageId::LaunchWorkDescription),
+            (launch_row_y(area, 1), MessageId::LaunchChatDescription),
+        ] {
+            let y = row.saturating_add(1);
+            if y >= content_floor {
+                continue;
+            }
+            render_launch_content_line(
+                area,
+                buf,
+                y,
+                LAUNCH_INSET.saturating_mul(2),
+                vec![Span::styled(
+                    // The description is indented one step inside the reading
+                    // column, so it gives that step back on the right rather
+                    // than running past the key column beside it.
+                    truncate_to_width(
+                        &tr(app.ui_locale, description_id),
+                        launch_column_width(area, tier).saturating_sub(usize::from(LAUNCH_INSET)),
+                    ),
+                    Style::default().fg(app.ui_theme.text_muted),
+                )],
+            );
+        }
     }
 
     for (index, (label_id, key)) in LAUNCH_ROWS.iter().enumerate() {
         let y = launch_row_y(area, index);
-        if y >= area.height.saturating_sub(3) {
+        if y >= content_floor {
             break;
         }
         let selected = app.launch.selected == index;
@@ -992,7 +1240,7 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
         }
         let prefix = if selected { "▸ " } else { "  " };
         let key_width = key.width();
-        let content_width = width.saturating_sub(4);
+        let content_width = launch_column_width(area, tier);
         let label_budget = content_width.saturating_sub(prefix.width() + key_width + 2);
         let label = truncate_to_width(&label, label_budget);
         let fill = content_width.saturating_sub(prefix.width() + label.width() + key_width);
@@ -1012,7 +1260,7 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
             area,
             buf,
             y,
-            2,
+            LAUNCH_INSET,
             vec![
                 Span::styled(prefix, row_style),
                 Span::styled(label, row_style),
@@ -1025,11 +1273,10 @@ pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
     if area.height < 3 {
         return;
     }
-    let rule_y = area.height.saturating_sub(3);
     render_launch_line(
         area,
         buf,
-        rule_y,
+        content_floor,
         vec![Span::styled(
             "─".repeat(width),
             Style::default().fg(app.ui_theme.border),
@@ -2068,5 +2315,88 @@ mod header_tests {
             assert!(!line.contains('['), "{line:?}");
             assert!(!line.contains('%'), "{line:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::{
+        LAUNCH_ROWS, LaunchTier, launch_row_y, launch_tier, record_launch_row_areas,
+        render_launch_screen,
+    };
+    use crate::tui::app::App;
+    use crate::tui::brand;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    fn app() -> App {
+        crate::test_support::test_app_with_options(crate::test_support::test_tui_options(
+            std::env::temp_dir(),
+        ))
+    }
+
+    fn screen(app: &App, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        render_launch_screen(area, &mut buf, app);
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Every tier keeps the mouse hit boxes on the rows the paint used, and
+    /// no row is written onto the closing rule or the two chrome rows below
+    /// it. This is the contract the launch menu is unusable without.
+    #[test]
+    fn recorded_rows_match_the_painted_rows_at_every_size() {
+        for (width, height) in [
+            (100u16, 34u16),
+            (80, 24),
+            (72, 30),
+            (60, 22),
+            (54, 16),
+            (40, 10),
+        ] {
+            let area = Rect::new(0, 0, width, height);
+            let mut launch = crate::tui::app::LaunchState::new(true, std::path::Path::new("."));
+            record_launch_row_areas(area, &mut launch);
+            let floor = height.saturating_sub(3);
+            for (index, recorded) in launch.row_areas.iter().enumerate() {
+                assert_eq!(recorded.y, launch_row_y(area, index), "{width}x{height}");
+                assert!(recorded.y < floor, "{width}x{height} row {index} on chrome");
+            }
+            let painted = (0..LAUNCH_ROWS.len())
+                .take_while(|index| launch_row_y(area, *index) < floor)
+                .count();
+            assert_eq!(launch.row_areas.len(), painted, "{width}x{height}");
+        }
+    }
+
+    /// The wordmark is the startup screen's whole point: if the name and the
+    /// welcome card stop rendering, the screen silently reverts to the bare
+    /// list it replaced.
+    #[test]
+    fn the_detailed_tiers_show_the_wordmark_and_the_card() {
+        let mut app = app();
+        app.launch.visible = true;
+
+        let full = screen(&app, 100, 34);
+        assert_eq!(launch_tier(Rect::new(0, 0, 100, 34)), LaunchTier::Full);
+        assert!(full.contains(brand::DISPLAY_NAME), "{full}");
+        assert!(full.contains(brand::MARK[1]), "{full}");
+        assert!(full.contains('╭') && full.contains('╯'), "{full}");
+
+        let standard = screen(&app, 80, 24);
+        assert_eq!(launch_tier(Rect::new(0, 0, 80, 24)), LaunchTier::Standard);
+        assert!(standard.contains(brand::DISPLAY_NAME), "{standard}");
+        assert!(standard.contains(brand::MARK[0]), "{standard}");
+
+        let compact = screen(&app, 54, 16);
+        assert_eq!(launch_tier(Rect::new(0, 0, 54, 16)), LaunchTier::Compact);
+        assert!(compact.contains(brand::DISPLAY_NAME), "{compact}");
     }
 }

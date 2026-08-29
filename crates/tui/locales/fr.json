@@ -1107,6 +1107,7 @@
   "CommandPaletteSubtitle": "Trouvez et exécutez une action",
   "ConfigSubtitle": "Réglages d'abord ; clés brutes dans le détail avancé",
   "LaunchStartTitle": "Commencer ici",
+  "LaunchWelcomeBanner": "Bienvenue dans {name}",
   "LaunchMenuWork": "Travail · dossier actuel",
   "LaunchMenuChat": "Discussion · lecture seule",
   "LaunchWorkDescription": "Utilisez ce dossier avec les outils locaux ; les modifications suivent votre politique d’approbation.",

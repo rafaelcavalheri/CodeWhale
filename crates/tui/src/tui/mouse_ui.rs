@@ -1853,14 +1853,21 @@ mod tests {
         app.launch.worktree_available = true;
         crate::tui::underwater::record_launch_row_areas(Rect::new(0, 0, 80, 24), &mut app.launch);
 
-        handle_mouse_event(&mut app, left_click(10, 10));
+        // Click the rows the renderer actually recorded. Pinning literal
+        // coordinates here froze one launch layout into a mouse-dispatch
+        // test, so every visual revision of the startup screen failed a test
+        // that was never about pixels.
+        let chat_row = app.launch.row_areas[1];
+        let work_row = app.launch.row_areas[0];
+
+        handle_mouse_event(&mut app, left_click(chat_row.x + 8, chat_row.y));
         assert_eq!(app.launch.selected, 1);
         assert_eq!(
             app.pending_launch_action.take(),
             Some(crate::tui::underwater::LaunchAction::NewChat)
         );
 
-        handle_mouse_event(&mut app, left_click(10, 7));
+        handle_mouse_event(&mut app, left_click(work_row.x + 8, work_row.y));
         assert_eq!(app.launch.selected, 0);
         assert_eq!(
             app.pending_launch_action.take(),

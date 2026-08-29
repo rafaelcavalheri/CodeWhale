@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "Tìm và chạy một thao tác",
   "ConfigSubtitle": "Cài đặt trước; khóa thô ở chi tiết nâng cao",
   "LaunchStartTitle": "Bắt đầu tại đây",
+  "LaunchWelcomeBanner": "Chào mừng bạn đến với {name}",
   "LaunchMenuWork": "Làm việc · thư mục hiện tại",
   "LaunchMenuChat": "Trò chuyện · chỉ đọc",
   "LaunchWorkDescription": "Dùng công cụ cục bộ trong thư mục này; mọi thay đổi tuân theo chính sách phê duyệt của bạn.",

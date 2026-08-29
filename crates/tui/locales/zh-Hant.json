@@ -974,6 +974,7 @@
   "LaunchHintOpen": "開啟",
   "LaunchMenuChangelog": "更新日誌",
   "LaunchStartTitle": "從這裡開始",
+  "LaunchWelcomeBanner": "歡迎使用 {name}",
   "LaunchMenuWork": "工作 · 目前資料夾",
   "LaunchMenuChat": "聊天 · 唯讀",
   "LaunchWorkDescription": "在此資料夾中使用本機工具；變更遵循你的核准政策。",

@@ -1107,6 +1107,7 @@
   "CommandPaletteSubtitle": "Знайдіть і виконайте одну дію",
   "ConfigSubtitle": "Спочатку налаштування; сирі ключі — в розширених деталях",
   "LaunchStartTitle": "Почніть тут",
+  "LaunchWelcomeBanner": "Ласкаво просимо до {name}",
   "LaunchMenuWork": "Робота · поточна папка",
   "LaunchMenuChat": "Чат · лише читання",
   "LaunchWorkDescription": "Використовуйте локальні інструменти в цій папці; зміни підпорядковуються політиці схвалення.",

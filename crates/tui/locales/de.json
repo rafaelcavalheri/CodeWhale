@@ -1107,6 +1107,7 @@
   "CommandPaletteSubtitle": "Eine Aktion finden und ausführen",
   "ConfigSubtitle": "Einstellungen zuerst; Rohschlüssel im erweiterten Detail",
   "LaunchStartTitle": "Hier starten",
+  "LaunchWelcomeBanner": "Willkommen bei {name}",
   "LaunchMenuWork": "Arbeiten · aktueller Ordner",
   "LaunchMenuChat": "Chat · schreibgeschützt",
   "LaunchWorkDescription": "Diesen Ordner mit lokalen Werkzeugen verwenden; Änderungen folgen der Genehmigungsrichtlinie.",

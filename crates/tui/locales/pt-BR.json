@@ -1130,6 +1130,7 @@
   "CommandPaletteSubtitle": "Encontre e execute uma ação",
   "ConfigSubtitle": "Configurações primeiro; chaves brutas no detalhe avançado",
   "LaunchStartTitle": "Comece aqui",
+  "LaunchWelcomeBanner": "Bem-vindo ao {name}",
   "LaunchMenuWork": "Trabalho · pasta atual",
   "LaunchMenuChat": "Chat · somente leitura",
   "LaunchWorkDescription": "Use esta pasta com ferramentas locais; as alterações seguem sua política de aprovação.",

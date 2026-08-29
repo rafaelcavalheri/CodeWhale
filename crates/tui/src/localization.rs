@@ -1322,6 +1322,7 @@ pub enum MessageId {
     SetupGuidedNotes,
     // Underwater launch screen (pre-session menu + worktree flow).
     LaunchStartTitle,
+    LaunchWelcomeBanner,
     LaunchMenuWork,
     LaunchMenuChat,
     LaunchWorkDescription,
@@ -3046,6 +3047,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::SetupGuidedEvidenceReleaseReceipts,
     MessageId::SetupGuidedNotes,
     MessageId::LaunchStartTitle,
+    MessageId::LaunchWelcomeBanner,
     MessageId::LaunchMenuWork,
     MessageId::LaunchMenuChat,
     MessageId::LaunchWorkDescription,
